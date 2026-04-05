@@ -62,7 +62,7 @@ git-branch-cleanup -o -p "feature/.*|hotfix/.*" -i
 
 1. Scans the specified directory (or subdirectories up to the given depth) for Git repositories
 2. For each repository found:
-   - Switches to a safe branch (main, master, dev, or develop)
+   - Switches to the main branch (tries: main, master, dev, develop) before deleting
    - Identifies local branches to delete (excluding protected branches)
    - If =-o= flag is used, also identifies remote branches to delete
    - Deletes the branches (or shows what would be deleted in dry-run mode)

@@ -1,0 +1,25 @@
+* Scripts and Tools
+
+This directory contains custom CLI scripts and tools.
+
+** Structure:
+- Each tool has its own directory
+
+** Current contents:
+- [[./git-branch-cleanup][git-branch-cleanup]]: Script to clean up local and remote branches in Git repositories
+
+** Installation:
+
+*** Step 1: Create a specific symlink
+
+#+begin_src bash
+ln -s ~/.scripts/git-branch-cleanup/git-branch-cleanup.sh ~/bin/git-branch-cleanup
+#+end_src
+
+*** Step 2: Add ~/bin to PATH
+
+#+begin_src bash
+# Add to ~/.zshrc
+echo 'export PATH="$HOME/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+#+end_src

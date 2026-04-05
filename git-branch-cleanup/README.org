@@ -1,0 +1,77 @@
+* git-branch-cleanup
+
+Script to clean up local and remote branches in Git repositories.
+
+** Usage:
+
+#+begin_src bash
+git-branch-cleanup [-o] [-d base_directory] [-e "branch1,branch2"] [-p "pattern"] [-x "dir1,dir2"] [-r depth] [-m "remote1,remote2"] [-n] [-i] [-l logfile] [path]
+#+end_src
+
+** Options:
+
+| Option | Description                                                                       |
+|--------+-----------------------------------------------------------------------------------|
+| =-o=     | Delete remote branches from origin (not just local)                               |
+| =-d=     | Base directory to start scanning (default: current directory)                     |
+| =-e=     | Additional branches to exclude (comma-separated)                                  |
+| =-p=     | Branch pattern to exclude (regex). See examples below                             |
+| =-x=     | Directories to exclude from search (comma-separated, e.g., "node_modules,vendor") |
+| =-r=     | Search depth for subdirectories (default: 1)                                      |
+| =-m=     | Remote(s) to use (default: origin)                                                |
+| =-n=     | Dry-run mode (simulate without deleting)                                          |
+| =-i=     | Interactive confirmation before deleting                                          |
+| =-l=     | Log output to file                                                                |
+| =-h=     | Show help message                                                                 |
+
+** Default excluded branches:
+
+- main
+- master
+- staging
+- dev
+
+** Examples:
+
+Clean branches in current directory:
+#+begin_src bash
+git-branch-cleanup
+#+end_src
+
+Clean branches in a specific path:
+#+begin_src bash
+git-branch-cleanup -d /path/to/repos
+#+end_src
+
+Dry-run with remote branch deletion:
+#+begin_src bash
+git-branch-cleanup -o -e "branch1,branch2" -n
+#+end_src
+
+Search deeper in subdirectories and exclude specific directories:
+#+begin_src bash
+git-branch-cleanup -d /projects -r 2 -x "node_modules,vendor"
+#+end_src
+
+Delete remote branches with pattern exclusion:
+#+begin_src bash
+git-branch-cleanup -o -p "feature/.*|hotfix/.*" -i
+#+end_src
+
+** How it works:
+
+1. Scans the specified directory (or subdirectories up to the given depth) for Git repositories
+2. For each repository found:
+   - Switches to a safe branch (main, master, dev, or develop)
+   - Identifies local branches to delete (excluding protected branches)
+   - If =-o= flag is used, also identifies remote branches to delete
+   - Deletes the branches (or shows what would be deleted in dry-run mode)
+3. Displays a summary with counts of deleted branches
+
+** Notes:
+
+- The script never deletes: main, master, staging, or dev branches
+- Additional branches can be excluded with the =-e= flag
+- Branch patterns can be excluded with the =-p= flag (regex supported)
+- Use =-n= first to see what would be deleted before actually deleting
+- The =-i= flag prompts for confirmation before deleting in each repository

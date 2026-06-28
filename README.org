@@ -7,13 +7,18 @@ This directory contains custom CLI scripts and tools.
 
 ** Current contents:
 - [[./git-branch-cleanup][git-branch-cleanup]]: Script to clean up local and remote branches in Git repositories
+- [[./git-group-clone][git-group-clone]]: Clone all repositories from a GitHub organization or GitLab group
 
 ** Installation:
 
-*** Step 1: Create a specific symlink
+*** Step 1: Create symlinks
 
 #+begin_src bash
+# git-branch-cleanup
 ln -s ~/.scripts/git-branch-cleanup/git-branch-cleanup.sh ~/bin/git-branch-cleanup
+
+# git-group-clone
+ln -s ~/.scripts/git-group-clone/git-group-clone.sh ~/bin/git-group-clone
 #+end_src
 
 *** Step 2: Add ~/bin to PATH

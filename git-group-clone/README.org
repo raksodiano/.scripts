@@ -1,0 +1,67 @@
+* git-group-clone
+
+Clone all repositories from a GitHub organization or GitLab group via SSH.
+
+** Usage:
+
+#+begin_src bash
+git-group-clone -p <github|gitlab> -g <org|group> -d <destination> [-n] [-l logfile] [-h]
+#+end_src
+
+** Options:
+
+| Option | Description                                                                          |
+|--------+--------------------------------------------------------------------------------------|
+| =-p=     | Provider: github or gitlab                                                           |
+| =-g=     | Organization (GitHub) or group path (GitLab, supports subgroups)                     |
+| =-d=     | Destination directory where repos will be cloned (flat, one per folder)              |
+| =-r=     | Comma-separated repo names (skip API discovery, e.g. ="repo1,repo2"=)               |
+| =-n=     | Dry-run mode (list repos without cloning)                                            |
+| =-l=     | Log output to file                                                                   |
+| =-h=     | Show help message                                                                    |
+
+** Examples:
+
+Clone all repos from a GitHub organization:
+#+begin_src bash
+git-group-clone -p github -g my-org -d ~/projects
+#+end_src
+
+Clone all projects from a GitLab group (including subgroups):
+#+begin_src bash
+git-group-clone -p gitlab -g my-group/subgroup -d ~/code
+#+end_src
+
+Dry-run to preview what would be cloned:
+#+begin_src bash
+git-group-clone -p github -g my-org -d ~/projects -n
+#+end_src
+
+** How it works:
+
+1. For GitLab: obtains an API token via [[https://docs.gitlab.com/ee/api/oauth2.html#device-authorization-grant][OAuth Device Authorization Grant]] (opens browser), or uses =GITLAB_TOKEN=/=GL_TOKEN= env var if set
+2. For GitHub: uses =GITHUB_TOKEN=/=GH_TOKEN= env var if set (public repos work without)  
+3. Calls the appropriate API to list all repositories in the specified org/group
+4. Handles pagination (100 per page) and GitLab subgroups (=include_subgroups=true=)
+5. For each repository:
+   - If the destination directory already exists → skips it
+   - Otherwise → clones via SSH URL (never HTTPS; token only used for discovery)
+6. Displays a summary with counts of found, cloned, skipped, and failed
+
+** Requirements:
+
+- SSH keys configured for GitHub/GitLab
+- Git installed
+- curl installed
+- Browser (for GitLab OAuth flow on first run; token is cached afterwards)
+
+** Notes:
+
+- Uses SSH URLs for cloning (=git@github.com:...= / =git@gitlab.com:...=)
+- For public repos, no API token is needed
+- For private GitLab groups, OAuth device flow authenticates via browser automatically
+- OAuth token is cached at =~/.cache/git-group-clone/oauth_token= and refreshed automatically
+- Token has =api= scope and expires after 2 hours (auto-refreshed)
+- Set =GITLAB_TOKEN= or =GL_TOKEN= env var to skip OAuth flow (e.g., in CI)
+- If a repo directory already exists, it is skipped
+- Use =-r= to provide repo names directly when API discovery is not possible

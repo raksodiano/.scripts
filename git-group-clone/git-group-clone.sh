@@ -9,7 +9,7 @@ repos_list=""
 dry_run=false
 log_file=""
 
-GITLAB_CLIENT_ID="${GIT_GROUP_CLONE_GITLAB_CLIENT_ID:-}"
+GITLAB_CLIENT_ID="${GIT_GROUP_CLONE_GITLAB_CLIENT_ID:-36f2a70cddeb5a0889d4fd8295c241b7e9848e89cf9e599d0eed2d8e5350fbf5}"
 GITLAB_OAUTH_DIR="$HOME/.cache/git-group-clone"
 GITLAB_OAUTH_TOKEN_FILE="$GITLAB_OAUTH_DIR/oauth_token"
 
@@ -35,7 +35,7 @@ log() {
         error)   color="$RED" ;;
         *)       color="$NC" ;;
     esac
-    echo -e "${color}${msg}${NC}"
+    echo -e "${color}${msg}${NC}" >&2
     [[ -n "${log_file:-}" ]] && echo "$msg" >> "$log_file"
 }
 
@@ -87,14 +87,16 @@ save_oauth_token() {
         return 1
     fi
     mkdir -p "$GITLAB_OAUTH_DIR"
-    cat > "$GITLAB_OAUTH_TOKEN_FILE" << EOF
+    (
+        umask 077
+        cat > "$GITLAB_OAUTH_TOKEN_FILE" << EOF
 OAUTH_ACCESS_TOKEN=$token
 OAUTH_REFRESH_TOKEN=$refresh
 OAUTH_CREATED_AT=$created
 OAUTH_EXPIRES_IN=$expires_in
 OAUTH_EXPIRES_AT=$expires_at
 EOF
-    chmod 600 "$GITLAB_OAUTH_TOKEN_FILE"
+    )
 }
 
 show_help() {
@@ -311,13 +313,18 @@ do_gitlab_oauth_device_flow() {
     log warn "You'll need to authenticate with GitLab.com in your browser."
     echo ""
 
-    local device_response
-    device_response=$(curl -sf -X POST "https://gitlab.com/oauth/authorize_device" \
+    local device_response curl_exit
+    device_response=$(curl -s -X POST "https://gitlab.com/oauth/authorize_device" \
         -H "Content-Type: application/x-www-form-urlencoded" \
         -d "client_id=$GITLAB_CLIENT_ID&scope=api" 2>/dev/null)
+    curl_exit=$?
 
-    if [[ -z "$device_response" ]]; then
-        log error "Failed to start device authorization. Check your internet connection."
+    if [[ -z "$device_response" ]] || echo "$device_response" | grep -q '"error"'; then
+        local err_msg
+        err_msg=$(echo "$device_response" | grep -o '"error_description":"[^"]*"' | sed 's/^[^:]*:"//;s/"$//' || echo "Unknown error")
+        log error "Failed to start device authorization."
+        log error "GitLab says: $err_msg"
+        log warn "Make sure your OAuth application has 'Confidential' UNCHECKED."
         return 1
     fi
 
@@ -412,7 +419,7 @@ fetch_gitlab_repos() {
         [[ -n "${gitlab_token:-}" ]] && curl_args+=(-H "Authorization: Bearer $gitlab_token")
         curl_args+=("https://gitlab.com/api/v4/groups/$encoded_group/projects?per_page=100&page=$page&include_subgroups=true")
 
-        response=$("${curl_args[@]}" 2>/dev/null) || true
+        response=$("${curl_args[@]}" 2>/dev/null)
         curl_exit=$?
 
         if [[ $curl_exit -ne 0 ]] || [[ -z "$response" ]]; then
@@ -451,9 +458,8 @@ fetch_gitlab_repos() {
 
 get_repo_name() {
     local ssh_url="$1"
-    local name
-    name=$(echo "$ssh_url" | sed 's/.*\///; s/\.git$//')
-    echo "$name"
+    local name="${ssh_url##*/}"
+    echo "${name%.git}"
 }
 
 clone_repo() {
@@ -518,25 +524,28 @@ main() {
 
         case "$provider" in
             github)
-                while IFS= read -r url; do
+                mapfile -t github_repos < <(fetch_github_repos "$group")
+                for url in "${github_repos[@]}"; do
                     [[ -n "$url" ]] && all_repos+=("$url")
-                done < <(fetch_github_repos "$group")
+                done
                 ;;
             gitlab)
                 ensure_gitlab_token
                 local repos_output fetch_exit
                 repos_output=$(fetch_gitlab_repos "$group")
                 fetch_exit=$?
-                while IFS= read -r url; do
+                mapfile -t gl_repos <<< "$repos_output"
+                for url in "${gl_repos[@]}"; do
                     [[ -n "$url" ]] && all_repos+=("$url")
-                done <<< "$repos_output"
-                if [[ "$fetch_exit" -eq 2 ]] && [[ -z "$gitlab_token" ]]; then
-                    log warn "Group might be private — attempting OAuth auth..."
+                done
+                if [[ ${#all_repos[@]} -eq 0 ]] && [[ -z "$gitlab_token" ]]; then
+                    log warn "No public repositories found. Attempting OAuth auth to check for private repos..."
                     if do_gitlab_oauth_device_flow; then
                         repos_output=$(fetch_gitlab_repos "$group")
-                        while IFS= read -r url; do
+                        mapfile -t gl_repos <<< "$repos_output"
+                        for url in "${gl_repos[@]}"; do
                             [[ -n "$url" ]] && all_repos+=("$url")
-                        done <<< "$repos_output"
+                        done
                     fi
                 fi
                 ;;
@@ -559,16 +568,53 @@ main() {
 
     local cloned=0 skipped=0 failed=0
 
+    # Configuración de concurrencia
+    local max_jobs=4
+    local current_jobs=0
+    local pids=()
+    local tmp_results
+    tmp_results=$(mktemp)
+
+    do_clone_job() {
+        local url="$1" dir="$2" name="$3"
+        clone_repo "$url" "$dir" "$name"
+        local res=$?
+        echo "$res" >> "$tmp_results"
+    }
+
     for ssh_url in "${all_repos[@]}"; do
         local repo_name
         repo_name=$(get_repo_name "$ssh_url")
-        clone_repo "$ssh_url" "$group_dir/$repo_name" "$repo_name"
-        case $? in
-            0) cloned=$((cloned + 1)) ;;
-            1) failed=$((failed + 1)) ;;
-            2) skipped=$((skipped + 1)) ;;
-        esac
+        
+        do_clone_job "$ssh_url" "$group_dir/$repo_name" "$repo_name" &
+        pids+=($!)
+        current_jobs=$((current_jobs + 1))
+
+        if [[ $current_jobs -ge $max_jobs ]]; then
+            for pid in "${pids[@]}"; do
+                wait "$pid"
+            done
+            pids=()
+            current_jobs=0
+        fi
     done
+
+    # Esperar a los trabajos restantes
+    for pid in "${pids[@]}"; do
+        wait "$pid"
+    done
+
+    # Recolectar resultados
+    if [[ -f "$tmp_results" ]]; then
+        while IFS= read -r res; do
+            case $res in
+                0) cloned=$((cloned + 1)) ;;
+                1) failed=$((failed + 1)) ;;
+                2) skipped=$((skipped + 1)) ;;
+            esac
+        done < "$tmp_results"
+        rm -f "$tmp_results"
+    fi
 
     echo ""
     log info "============================================="

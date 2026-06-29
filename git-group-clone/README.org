@@ -55,6 +55,27 @@ git-group-clone -p github -g my-org -d ~/projects -n
 - curl installed
 - Browser (for GitLab OAuth flow on first run; token is cached afterwards)
 
+** Setup GitLab OAuth (Optional for private GitLab groups):
+
+To clone private groups from GitLab, the script uses the public GitLab VS Code Extension OAuth application to authenticate you securely via the browser. By default, no manual configuration is needed.
+
+If you prefer to use your own custom OAuth application, you can override the default by following these steps:
+
+1. Go to your GitLab settings: [[https://gitlab.com/-/user_settings/applications]]
+2. Click on *Add new application* and fill in the details:
+   - *Name*: =git-group-clone= (or any name you prefer)
+   - *Redirect URI*: =urn:ietf:wg:oauth:2.0:oob=
+   - *Confidential*: Uncheck this box (must be =No=)
+   - *Scopes*: Check the =api= box
+3. Click *Save application* and copy the generated *Application ID*.
+4. Add the Application ID to your shell configuration file (=~/.bashrc=, =~/.zshrc=, etc.):
+   #+begin_src bash
+   echo 'export GIT_GROUP_CLONE_GITLAB_CLIENT_ID="YOUR_APPLICATION_ID"' >> ~/.bashrc
+   source ~/.bashrc
+   #+end_src
+
+Whether using the default or a custom ID, running the script against a GitLab group will automatically prompt you to authorize the CLI in your browser.
+
 ** Notes:
 
 - Uses SSH URLs for cloning (=git@github.com:...= / =git@gitlab.com:...=)

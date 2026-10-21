@@ -7,9 +7,10 @@ The command scans a base directory (including subdirectories), collects every
 with a manifest, and can later put each file back at its original absolute path.
 
 Template files such as =.env.example=, =.env.sample= and =.env.template= are
-excluded by default. Packaged files keep their original names both in the archive
-and after a restore. Only a pre-existing file that would be overwritten is
-renamed to =<file>.bak.<timestamp>=.
+excluded by default. A restored file always keeps its original name. If a file
+already exists at the destination, only that existing conflicting file is
+renamed to =<file>.bak.<timestamp>=; if there is no conflict, the file is simply
+restored.
 
 ** Usage:
 
@@ -69,10 +70,11 @@ Default excluded patterns: =*.example=, =*.example.*=, =*.sample=,
 | =-l <logfile>=    | Log output to file                                                           |
 | =-h=              | Show help message                                                            |
 
-=undo= reverts the last recorded restore: it moves each backup back to its
+=undo= reverts the last recorded restore: it puts each backup back at its
 original path and removes files that did not exist before the restore. Running
 =undo= again reverts the previous restore. Journals are stored under
-=~/.local/state/env-backup/restores/= (or =$XDG_STATE_HOME=).
+=~/.local/state/env-backup/restores/= (or =$XDG_STATE_HOME=), while backups stay
+next to the original file as =<file>.bak.<timestamp>=.
 
 ** Examples:
 
@@ -145,8 +147,9 @@ stable across runs and restores follow that same order.
    validated (no absolute paths, no =../= traversal, only expected members).
 2. Each entry in =manifest.tsv= is processed in order.
 3. If a destination file already exists, only that conflicting file is renamed
-   in place to =<file>.bak.<timestamp>=. Files restored from the archive always
-   keep their original name. Files that do not conflict are never renamed.
+   in place to =<file>.bak.<timestamp>=. Then the archived file is written using
+   its original name. If there is no conflict, the file is simply restored and
+   nothing is renamed.
 4. The SHA-256 stored in the manifest is verified. On mismatch the file is
    skipped unless =-f= / =--force= is used.
 5. Parent directories are created as needed and the original mode is restored.
@@ -160,9 +163,9 @@ stable across runs and restores follow that same order.
 - The restore operation writes to the original absolute paths recorded at pack
   time. Make sure the environment is the one you expect.
 - Use =-n= to preview both =pack= and =restore= before running them for real.
-- During restore, only a conflicting destination file is renamed to
-  =<file>.bak.<timestamp>= before writing the restored file with its original
-  name. Backups contain secrets too, so review and remove them when appropriate.
+- The restored =.env= is never renamed. Only a pre-existing file at the same
+  path is renamed to =<file>.bak.<timestamp>=. Those backups contain secrets too,
+  so review and remove them when appropriate.
 - Undo journals store absolute paths and checksums, never file contents.
 
 ** How it works:
@@ -176,6 +179,6 @@ stable across runs and restores follow that same order.
 4. ==restore== validates the archive, reads the manifest in order, backs up
    existing files, writes each file back to its absolute path and records a
    journal.
-5. ==undo== reads the latest journal in reverse order, moves backups back,
+5. ==undo== reads the latest journal in reverse order, puts backups back,
    removes files that were created by the restore and clears the journal.
 6. A summary shows packaged/restored, backed up, skipped and failed counts.

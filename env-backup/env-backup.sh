@@ -71,8 +71,9 @@ show_help() {
     echo "  -l <logfile>    Log output to file"
     echo ""
     echo -e "${BLUE}Restore behavior:${NC}"
-    echo "  Existing .env files are renamed in place to <file>.bak.<timestamp>."
-    echo "  Restored files always keep their original name."
+    echo "  The restored .env always keeps its original name."
+    echo "  If that path already exists, only the existing file is renamed to"
+    echo "  <file>.bak.<timestamp>; otherwise the file is simply restored."
     echo ""
     echo -e "${BLUE}Undo options:${NC}"
     echo "  -f, --force     Undo even if a file changed after the restore"
@@ -402,7 +403,7 @@ cmd_restore() {
     done
 
     [[ -n "$archive" ]] || die "Archive is required (-a)"
-    check_deps tar sha256sum
+    check_deps tar sha256sum cp mkdir
 
     [[ -e "$archive" ]] || die "Archive does not exist: $archive"
     [[ -f "$archive" ]] || die "Archive is not a file: $archive"
@@ -415,7 +416,7 @@ cmd_restore() {
     [[ -f "$stage/manifest.tsv" ]] || die "Invalid archive: manifest.tsv not found"
 
     local manifest="$stage/manifest.tsv"
-    local run_ts journal
+    local run_ts run_dir journal
     run_ts="$(date +%Y%m%d-%H%M%S)"
     journal="$stage/journal.tsv"
     {
@@ -424,6 +425,22 @@ cmd_restore() {
         printf '# date: %s\n' "$(date -Iseconds)"
         printf '# ACTION\tABSOLUTE_PATH\tBACKUP_PATH\tSHA256\n'
     } > "$journal" || die "Cannot create restore journal"
+
+    local state_base
+    state_base="${XDG_STATE_HOME:-${HOME:-$PWD}/.local/state}/env-backup/restores"
+    if $dry_run; then
+        run_dir="$state_base/${run_ts}-$$"
+    else
+        if ! mkdir -p -- "$state_base"; then
+            die "Cannot create undo directory: $state_base"
+        fi
+        chmod 700 -- "$state_base" 2>/dev/null
+        run_dir="$(unique_path "$state_base/${run_ts}-$$")"
+        if ! mkdir -p -- "$run_dir"; then
+            die "Cannot create undo directory: $run_dir"
+        fi
+        chmod 700 -- "$run_dir" 2>/dev/null
+    fi
 
     log "$GREEN" "Restoring from: $archive"
     $dry_run && log "$YELLOW" "*** DRY-RUN - No files will be written ***"
@@ -486,10 +503,10 @@ cmd_restore() {
         if [[ -e "$abs" || -L "$abs" ]]; then
             backup="$(unique_path "${abs}.bak.${run_ts}")"
             if $dry_run; then
-                log "$YELLOW" "  [DRY-RUN] Would rename existing: $abs -> $backup"
+                log "$YELLOW" "  [DRY-RUN] Would back up existing file: $abs -> $backup"
             else
                 mv -- "$abs" "$backup" || {
-                    log "$RED" "  Cannot rename existing file: $abs"
+                    log "$RED" "  Cannot back up existing file: $abs"
                     failed=$((failed + 1))
                     continue
                 }
@@ -506,6 +523,9 @@ cmd_restore() {
         if ! mkdir -p -- "$parent"; then
             log "$RED" "  Cannot create directory: $parent"
             failed=$((failed + 1))
+            if [[ -n "$backup" && -e "$backup" ]]; then
+                mv -- "$backup" "$abs" 2>/dev/null
+            fi
             continue
         fi
 
@@ -521,26 +541,24 @@ cmd_restore() {
             log "$GREEN" "  Restored: $abs"
             restored=$((restored + 1))
         else
-            log "$RED" "  Failed to restore: $abs"
+            if [[ -n "$backup" && -e "$backup" ]]; then
+                mv -- "$backup" "$abs" 2>/dev/null
+                log "$YELLOW" "  Restore failed; existing file left unchanged: $abs"
+            else
+                log "$RED" "  Failed to restore: $abs"
+            fi
             failed=$((failed + 1))
         fi
     done < "$manifest"
 
-    if [[ "$restored" -gt 0 && "$dry_run" = false ]]; then
-        local state_base journal_dir run_id
-        state_base="${XDG_STATE_HOME:-${HOME:-$PWD}/.local/state}/env-backup/restores"
-        run_id="${run_ts}-$$"
-        if mkdir -p -- "$state_base" && chmod 700 -- "$state_base" 2>/dev/null; then
-            journal_dir="$(unique_path "$state_base/$run_id")"
-            if mkdir -p -- "$journal_dir" && chmod 700 -- "$journal_dir" 2>/dev/null \
-                && mv -- "$journal" "$journal_dir/journal.tsv"; then
-                chmod 600 -- "$journal_dir/journal.tsv" 2>/dev/null
-                journal_saved=true
-            else
-                log "$YELLOW" "Warning: could not save undo journal in $state_base"
-            fi
+    if ! $dry_run; then
+        if [[ "$restored" -eq 0 ]]; then
+            rm -rf -- "$run_dir"
+        elif mv -- "$journal" "$run_dir/journal.tsv"; then
+            chmod 600 -- "$run_dir/journal.tsv" 2>/dev/null
+            journal_saved=true
         else
-            log "$YELLOW" "Warning: could not create undo journal directory: $state_base"
+            log "$YELLOW" "Warning: could not save undo journal in $run_dir"
         fi
     fi
 
@@ -550,13 +568,10 @@ cmd_restore() {
     log "$BLUE" "============================================="
     log "$GREEN" "  Restored:  $restored"
     log "$BLUE" "  Backed up: $backed_up"
-    if [[ "$backed_up" -gt 0 ]]; then
-        log "$BLUE" "  Backup suffix: .bak.$run_ts"
-    fi
     log "$BLUE" "  Skipped:   $skipped"
     log "$BLUE" "  Failed:    $failed"
     if $journal_saved; then
-        log "$BLUE" "  Undo:      env-backup undo"
+        log "$BLUE" "  Undo:        env-backup undo"
     fi
     $dry_run && log "$YELLOW" "*** DRY-RUN - No files were actually restored ***"
     echo ""
@@ -599,13 +614,13 @@ cmd_undo() {
         esac
     done
 
-    check_deps sha256sum mv find
+    check_deps sha256sum cp find
 
     local state_base journal_dir journal
     state_base="${XDG_STATE_HOME:-${HOME:-$PWD}/.local/state}/env-backup/restores"
     [[ -d "$state_base" ]] || die "No restores recorded in: $state_base"
 
-    journal_dir="$(find "$state_base" -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null | LC_ALL=C sort | tail -1)"
+    journal_dir="$(find "$state_base" -mindepth 2 -maxdepth 2 -type f -name journal.tsv -printf '%h\n' 2>/dev/null | LC_ALL=C sort | tail -1)"
     [[ -n "$journal_dir" ]] || die "No restores recorded in: $state_base"
 
     journal="$journal_dir/journal.tsv"
@@ -687,6 +702,9 @@ cmd_undo() {
                     "$abs".bak.*) ;;
                     *) log "$YELLOW" "  Skipping invalid backup path: $backup"; skipped=$((skipped + 1)); continue ;;
                 esac
+                case "$backup" in
+                    */../*|*/..|..) log "$YELLOW" "  Skipping unsafe backup path: $backup"; skipped=$((skipped + 1)); continue ;;
+                esac
                 if [[ ! -e "$backup" && ! -L "$backup" ]]; then
                     log "$RED" "  Backup not found: $backup"
                     failed=$((failed + 1))
@@ -702,7 +720,8 @@ cmd_undo() {
                     restored=$((restored + 1))
                     continue
                 fi
-                if mkdir -p -- "$(dirname -- "$abs")" && mv -f -- "$backup" "$abs"; then
+                if mkdir -p -- "$(dirname -- "$abs")" && cp -p -- "$backup" "$abs"; then
+                    rm -f -- "$backup" 2>/dev/null
                     log "$GREEN" "  Reverted: $abs"
                     restored=$((restored + 1))
                 else

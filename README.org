@@ -6,7 +6,7 @@ This directory contains custom CLI scripts and tools.
 - Each tool has its own directory
 
 ** Current contents:
-- [[./env-backup][env-backup]]: Package and restore all .env files from a directory tree
+- [[./env-backup][env-backup]]: Package, restore and undo .env files from a directory tree (examples excluded, names preserved)
 - [[./git-branch-cleanup][git-branch-cleanup]]: Script to clean up local and remote branches in Git repositories
 - [[./git-group-clone][git-group-clone]]: Clone all repositories from a GitHub organization or GitLab group
 

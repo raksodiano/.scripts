@@ -45,12 +45,14 @@ show_help() {
     echo -e "${BLUE}Usage:${NC}"
     echo "  $0 pack    -d <directory> [-o archive.tar.gz] [-r depth] [-x \"dir1,dir2\"] [-e \"pattern1,pattern2\"] [-n] [-l logfile]"
     echo "  $0 restore -a <archive.tar.gz> [-f] [-n] [-l logfile]"
+    echo "  $0 undo    [-f] [-n] [-l logfile]"
     echo "  $0 list    -a <archive.tar.gz>"
     echo "  $0 help"
     echo ""
     echo -e "${BLUE}Commands:${NC}"
     echo "  pack       Find .env and .env.* files recursively and package them in order"
     echo "  restore    Restore the packaged files to their original absolute paths"
+    echo "  undo       Revert the most recent restore using its recorded backups"
     echo "  list       Show the files contained in an archive"
     echo ""
     echo -e "${BLUE}Pack options:${NC}"
@@ -58,7 +60,7 @@ show_help() {
     echo "  -o <file>       Output archive path (default: env-backup-<base>-<timestamp>.tar.gz)"
     echo "  -r <depth>      Maximum search depth (default: unlimited)"
     echo "  -x \"dir1,dir2\"  Directories to exclude (comma-separated)"
-    echo "  -e \"p1,p2\"      Extra file glob patterns to exclude, e.g. \"*.example\""
+    echo "  -e \"p1,p2\"      Extra file glob patterns to exclude, e.g. \"*.local,*.secret\""
     echo "  -n              Dry-run mode (list files without packaging)"
     echo "  -l <logfile>    Log output to file"
     echo ""
@@ -68,15 +70,29 @@ show_help() {
     echo "  -n              Dry-run mode (show actions without writing)"
     echo "  -l <logfile>    Log output to file"
     echo ""
+    echo -e "${BLUE}Restore behavior:${NC}"
+    echo "  Existing .env files are renamed in place to <file>.bak.<timestamp>."
+    echo "  Restored files always keep their original name."
+    echo ""
+    echo -e "${BLUE}Undo options:${NC}"
+    echo "  -f, --force     Undo even if a file changed after the restore"
+    echo "  -n              Dry-run mode (show actions without writing)"
+    echo "  -l <logfile>    Log output to file"
+    echo ""
+    echo -e "${BLUE}Undo behavior:${NC}"
+    echo "  Reverts the last restore: puts backups back and removes files that"
+    echo "  did not exist before. Run it again to revert older restores."
+    echo ""
     echo -e "${BLUE}Default excluded directories:${NC}"
     echo "  .git, node_modules, vendor, dist, build, venv, .venv, __pycache__, .cache"
     echo -e "${BLUE}Default excluded patterns:${NC}"
-    echo "  *.bak, *.bak.* (restore backups)"
+    echo "  *.example, *.example.*, *.sample, *.sample.*, *.template, *.template.*"
+    echo "  *.bak, *.bak.*"
     echo ""
     echo -e "${BLUE}Examples:${NC}"
     echo "  $0 pack -d ~/projects"
     echo "  $0 pack -d ~/projects -o ~/envs.tar.gz -x \"node_modules,.git\""
-    echo "  $0 pack -d ~/projects -r 2 -e \"*.example,*.sample\" -n"
+    echo "  $0 pack -d ~/projects -r 2 -e \"*.local,*.secret\" -n"
     echo "  $0 list -a ~/envs.tar.gz"
     echo "  $0 restore -a ~/envs.tar.gz -n"
     echo "  $0 restore -a ~/envs.tar.gz"
@@ -98,6 +114,17 @@ check_deps() {
 sanitize_name() {
     local name="$1"
     echo "$name" | tr -c 'A-Za-z0-9._-' '_' | sed 's/_*$//'
+}
+
+unique_path() {
+    local base="$1"
+    local candidate="$1"
+    local n=1
+    while [[ -e "$candidate" || -L "$candidate" ]]; do
+        candidate="${base}-${n}"
+        n=$((n + 1))
+    done
+    echo "$candidate"
 }
 
 is_excluded_pattern() {
@@ -125,7 +152,7 @@ cmd_pack() {
     local opt
 
     log_file=""
-    exclude_patterns=("*.bak" "*.bak.*")
+    exclude_patterns=("*.bak" "*.bak.*" "*.example" "*.example.*" "*.sample" "*.sample.*" "*.template" "*.template.*")
     local -a exclude_dirs=(".git" "node_modules" "vendor" "dist" "build" "venv" ".venv" "__pycache__" ".cache")
 
     local -a args=()
@@ -388,14 +415,22 @@ cmd_restore() {
     [[ -f "$stage/manifest.tsv" ]] || die "Invalid archive: manifest.tsv not found"
 
     local manifest="$stage/manifest.tsv"
-    local run_ts
+    local run_ts journal
     run_ts="$(date +%Y%m%d-%H%M%S)"
+    journal="$stage/journal.tsv"
+    {
+        printf '# env-backup restore journal v1\n'
+        printf '# archive: %s\n' "$archive"
+        printf '# date: %s\n' "$(date -Iseconds)"
+        printf '# ACTION\tABSOLUTE_PATH\tBACKUP_PATH\tSHA256\n'
+    } > "$journal" || die "Cannot create restore journal"
 
     log "$GREEN" "Restoring from: $archive"
     $dry_run && log "$YELLOW" "*** DRY-RUN - No files will be written ***"
 
     local idx abs rel size sha mode mtime arch
     local restored=0 backed_up=0 skipped=0 failed=0
+    local journal_saved=false
 
     while IFS=$'\t' read -r idx abs rel size sha mode mtime arch; do
         [[ "$idx" == \#* || -z "$idx" ]] && continue
@@ -403,7 +438,13 @@ cmd_restore() {
         case "$rel" in
             /*|..|../*|*/../*|*/..) log "$YELLOW" "  Skipping unsafe relative path: $rel"; skipped=$((skipped + 1)); continue ;;
         esac
-        [[ "$abs" == /* ]] || { log "$YELLOW" "  Skipping non-absolute path: $abs"; skipped=$((skipped + 1)); continue; }
+        case "$abs" in
+            /*) ;;
+            *) log "$YELLOW" "  Skipping non-absolute path: $abs"; skipped=$((skipped + 1)); continue ;;
+        esac
+        case "$abs" in
+            */../*|*/..|..) log "$YELLOW" "  Skipping unsafe absolute path: $abs"; skipped=$((skipped + 1)); continue ;;
+        esac
         case "$arch" in
             files/*) ;;
             *) log "$YELLOW" "  Skipping invalid archive path: $arch"; skipped=$((skipped + 1)); continue ;;
@@ -443,17 +484,12 @@ cmd_restore() {
         fi
 
         if [[ -e "$abs" || -L "$abs" ]]; then
-            backup="${abs}.bak.${run_ts}.${idx}"
-            local n=1
-            while [[ -e "$backup" || -L "$backup" ]]; do
-                backup="${abs}.bak.${run_ts}.${idx}.${n}"
-                n=$((n + 1))
-            done
+            backup="$(unique_path "${abs}.bak.${run_ts}")"
             if $dry_run; then
-                log "$YELLOW" "  [DRY-RUN] Would back up: $abs -> $backup"
+                log "$YELLOW" "  [DRY-RUN] Would rename existing: $abs -> $backup"
             else
                 mv -- "$abs" "$backup" || {
-                    log "$RED" "  Cannot back up existing file: $abs"
+                    log "$RED" "  Cannot rename existing file: $abs"
                     failed=$((failed + 1))
                     continue
                 }
@@ -477,6 +513,11 @@ cmd_restore() {
             if [[ "$mode" =~ ^[0-7]{3,4}$ ]]; then
                 chmod "$mode" -- "$abs" 2>/dev/null
             fi
+            if [[ -n "$backup" ]]; then
+                printf 'replaced\t%s\t%s\t%s\n' "$abs" "$backup" "$actual_sha" >> "$journal"
+            else
+                printf 'created\t%s\t-\t%s\n' "$abs" "$actual_sha" >> "$journal"
+            fi
             log "$GREEN" "  Restored: $abs"
             restored=$((restored + 1))
         else
@@ -485,19 +526,216 @@ cmd_restore() {
         fi
     done < "$manifest"
 
+    if [[ "$restored" -gt 0 && "$dry_run" = false ]]; then
+        local state_base journal_dir run_id
+        state_base="${XDG_STATE_HOME:-${HOME:-$PWD}/.local/state}/env-backup/restores"
+        run_id="${run_ts}-$$"
+        if mkdir -p -- "$state_base" && chmod 700 -- "$state_base" 2>/dev/null; then
+            journal_dir="$(unique_path "$state_base/$run_id")"
+            if mkdir -p -- "$journal_dir" && chmod 700 -- "$journal_dir" 2>/dev/null \
+                && mv -- "$journal" "$journal_dir/journal.tsv"; then
+                chmod 600 -- "$journal_dir/journal.tsv" 2>/dev/null
+                journal_saved=true
+            else
+                log "$YELLOW" "Warning: could not save undo journal in $state_base"
+            fi
+        else
+            log "$YELLOW" "Warning: could not create undo journal directory: $state_base"
+        fi
+    fi
+
     echo ""
     log "$BLUE" "============================================="
     log "$BLUE" "           RESTORE SUMMARY                   "
     log "$BLUE" "============================================="
     log "$GREEN" "  Restored:  $restored"
     log "$BLUE" "  Backed up: $backed_up"
+    if [[ "$backed_up" -gt 0 ]]; then
+        log "$BLUE" "  Backup suffix: .bak.$run_ts"
+    fi
     log "$BLUE" "  Skipped:   $skipped"
     log "$BLUE" "  Failed:    $failed"
+    if $journal_saved; then
+        log "$BLUE" "  Undo:      env-backup undo"
+    fi
     $dry_run && log "$YELLOW" "*** DRY-RUN - No files were actually restored ***"
     echo ""
     [[ -n "$log_file" ]] && log "$GREEN" "Log saved to: $log_file"
 
     [[ "$failed" -gt 0 ]] && exit 1
+    exit 0
+}
+
+cmd_undo() {
+    local force=false
+    local dry_run=false
+    local opt
+
+    log_file=""
+    local -a args=()
+    local arg
+    for arg in "$@"; do
+        case "$arg" in
+            --force)   args+=(-f) ;;
+            --dry-run) args+=(-n) ;;
+            --help)    args+=(-h) ;;
+            --*)       die "Unknown option: $arg" ;;
+            *)         args+=("$arg") ;;
+        esac
+    done
+    set -- "${args[@]}"
+
+    OPTIND=1
+    while getopts "fnl:h" opt; do
+        case "$opt" in
+            f) force=true ;;
+            n) dry_run=true ;;
+            l) [[ -n "$OPTARG" ]] || die "-l requires a file"
+               log_file="$OPTARG"
+               : > "$log_file" 2>/dev/null || die "Cannot write to log file: $log_file"
+               ;;
+            h) show_help; exit 0 ;;
+            \?) show_help; exit 1 ;;
+        esac
+    done
+
+    check_deps sha256sum mv find
+
+    local state_base journal_dir journal
+    state_base="${XDG_STATE_HOME:-${HOME:-$PWD}/.local/state}/env-backup/restores"
+    [[ -d "$state_base" ]] || die "No restores recorded in: $state_base"
+
+    journal_dir="$(find "$state_base" -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null | LC_ALL=C sort | tail -1)"
+    [[ -n "$journal_dir" ]] || die "No restores recorded in: $state_base"
+
+    journal="$journal_dir/journal.tsv"
+    [[ -f "$journal" ]] || die "Restore journal not found: $journal"
+
+    local -a entries=()
+    local line
+    while IFS= read -r line; do
+        [[ "$line" == \#* || -z "$line" ]] && continue
+        entries+=("$line")
+    done < "$journal"
+
+    [[ ${#entries[@]} -gt 0 ]] || die "Restore journal is empty: $journal"
+
+    log "$GREEN" "Undoing restore: $(basename -- "$journal_dir")"
+    log "$BLUE" "Journal: $journal"
+    $dry_run && log "$YELLOW" "*** DRY-RUN - Nothing will be changed ***"
+
+    local restored=0 removed=0 skipped=0 failed=0 blocked=0
+    local i action abs backup sha
+    for ((i = ${#entries[@]} - 1; i >= 0; i--)); do
+        IFS=$'\t' read -r action abs backup sha <<< "${entries[$i]}"
+
+        case "$abs" in
+            /*) ;;
+            *) log "$YELLOW" "  Skipping non-absolute path: $abs"; skipped=$((skipped + 1)); continue ;;
+        esac
+        case "$abs" in
+            */../*|*/..|..) log "$YELLOW" "  Skipping unsafe path: $abs"; skipped=$((skipped + 1)); continue ;;
+        esac
+        case "$action" in
+            created|replaced) ;;
+            *) log "$YELLOW" "  Skipping unknown journal action: $action"; skipped=$((skipped + 1)); continue ;;
+        esac
+
+        if [[ -e "$abs" || -L "$abs" ]]; then
+            if [[ -n "$sha" ]]; then
+                local current_sha
+                current_sha="$(sha256sum -- "$abs" | cut -d' ' -f1)"
+                if [[ "${current_sha,,}" != "${sha,,}" ]]; then
+                    if $force; then
+                        log "$YELLOW" "  Modified since restore (forced): $abs"
+                    else
+                        log "$RED" "  Modified since restore, skipping: $abs"
+                        blocked=$((blocked + 1))
+                        continue
+                    fi
+                fi
+            fi
+        fi
+
+        case "$action" in
+            created)
+                if [[ ! -e "$abs" && ! -L "$abs" ]]; then
+                    log "$BLUE" "  Already absent: $abs"
+                    skipped=$((skipped + 1))
+                    continue
+                fi
+                if [[ -d "$abs" ]]; then
+                    log "$RED" "  Target is a directory, cannot undo: $abs"
+                    failed=$((failed + 1))
+                    continue
+                fi
+                if $dry_run; then
+                    log "$BLUE" "  [DRY-RUN] Would remove: $abs"
+                    removed=$((removed + 1))
+                    continue
+                fi
+                if rm -f -- "$abs"; then
+                    log "$GREEN" "  Removed: $abs"
+                    removed=$((removed + 1))
+                else
+                    log "$RED" "  Failed to remove: $abs"
+                    failed=$((failed + 1))
+                fi
+                ;;
+            replaced)
+                case "$backup" in
+                    "$abs".bak.*) ;;
+                    *) log "$YELLOW" "  Skipping invalid backup path: $backup"; skipped=$((skipped + 1)); continue ;;
+                esac
+                if [[ ! -e "$backup" && ! -L "$backup" ]]; then
+                    log "$RED" "  Backup not found: $backup"
+                    failed=$((failed + 1))
+                    continue
+                fi
+                if [[ -d "$abs" ]]; then
+                    log "$RED" "  Target is a directory, cannot undo: $abs"
+                    failed=$((failed + 1))
+                    continue
+                fi
+                if $dry_run; then
+                    log "$BLUE" "  [DRY-RUN] Would restore backup: $backup -> $abs"
+                    restored=$((restored + 1))
+                    continue
+                fi
+                if mkdir -p -- "$(dirname -- "$abs")" && mv -f -- "$backup" "$abs"; then
+                    log "$GREEN" "  Reverted: $abs"
+                    restored=$((restored + 1))
+                else
+                    log "$RED" "  Failed to revert: $abs"
+                    failed=$((failed + 1))
+                fi
+                ;;
+        esac
+    done
+
+    if ! $dry_run; then
+        if [[ "$failed" -eq 0 && "$blocked" -eq 0 ]]; then
+            rm -rf -- "$journal_dir"
+            log "$GREEN" "Journal cleared."
+        else
+            log "$YELLOW" "Journal kept for retry: $journal_dir"
+        fi
+    fi
+
+    echo ""
+    log "$BLUE" "============================================="
+    log "$BLUE" "            UNDO SUMMARY                     "
+    log "$BLUE" "============================================="
+    log "$GREEN" "  Reverted:  $restored"
+    log "$BLUE" "  Removed:   $removed"
+    log "$BLUE" "  Skipped:   $skipped"
+    log "$BLUE" "  Blocked:   $blocked"
+    log "$BLUE" "  Failed:    $failed"
+    $dry_run && log "$YELLOW" "*** DRY-RUN - Nothing was actually changed ***"
+    echo ""
+    [[ -n "$log_file" ]] && log "$GREEN" "Log saved to: $log_file"
+
+    [[ "$failed" -gt 0 || "$blocked" -gt 0 ]] && exit 1
     exit 0
 }
 
@@ -568,10 +806,11 @@ main() {
     case "$cmd" in
         pack)    cmd_pack "$@" ;;
         restore) cmd_restore "$@" ;;
+        undo)    cmd_undo "$@" ;;
         list)    cmd_list "$@" ;;
         help|-h|--help) show_help ;;
         --version|-v) echo "env-backup $VERSION" ;;
-        *) die "Unknown command: $cmd (use pack, restore, list or help)" ;;
+        *) die "Unknown command: $cmd (use pack, restore, undo, list or help)" ;;
     esac
 }
 

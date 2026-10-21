@@ -150,8 +150,10 @@ stable across runs and restores follow that same order.
    in place to =<file>.bak.<timestamp>=. Then the archived file is written using
    its original name. If there is no conflict, the file is simply restored and
    nothing is renamed.
-4. Template entries (=.env.example=, =.env.docker.example=, =.env.sample=,
-   =.env.template=, etc.) are ignored even if they exist in an older archive.
+4. Only real environment files are restored: =name= must be =.env= or start
+   with =.env.=. Templates (=.env.example=, =.env.docker.example=, =.env.sample=,
+   =.env.template=) and backup copies (=.env.bak.*=) are ignored even if they
+   exist in an older archive.
 5. The SHA-256 stored in the manifest is verified. On mismatch the file is
    skipped unless =-f= / =--force= is used.
 6. Parent directories are created as needed and the original mode is restored.

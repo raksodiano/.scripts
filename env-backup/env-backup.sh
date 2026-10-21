@@ -74,7 +74,7 @@ show_help() {
     echo "  The restored .env always keeps its original name."
     echo "  If that path already exists, only the existing file is renamed to"
     echo "  <file>.bak.<timestamp>; otherwise the file is simply restored."
-    echo "  Template files (.example/.sample/.template) are never restored."
+    echo "  Templates (.example/.sample/.template) and .bak copies are never restored."
     echo ""
     echo -e "${BLUE}Undo options:${NC}"
     echo "  -f, --force     Undo even if a file changed after the restore"
@@ -135,6 +135,19 @@ is_template_name() {
         *.example|*.example.*|*.sample|*.sample.*|*.template|*.template.*) return 0 ;;
     esac
     return 1
+}
+
+is_env_file() {
+    local name="${1##*/}"
+    case "$name" in
+        .env|.env.*) ;;
+        *) return 1 ;;
+    esac
+    is_template_name "$name" && return 1
+    case "$name" in
+        *.bak|*.bak.*) return 1 ;;
+    esac
+    return 0
 }
 
 is_excluded_pattern() {
@@ -247,7 +260,7 @@ cmd_pack() {
             log "$YELLOW" "  Skipping path with tabs/newlines: $f"
             continue
         fi
-        is_template_name "$rel" && continue
+        is_env_file "$rel" || continue
         is_excluded_pattern "$rel" && continue
         files+=("$f")
     done < <(find "${find_args[@]}" 2>/dev/null | LC_ALL=C sort -z)
@@ -462,7 +475,7 @@ cmd_restore() {
     while IFS=$'\t' read -r idx abs rel size sha mode mtime arch; do
         [[ "$idx" == \#* || -z "$idx" ]] && continue
 
-        if is_template_name "$abs"; then
+        if ! is_env_file "$abs"; then
             templates_skipped=$((templates_skipped + 1))
             continue
         fi
@@ -585,7 +598,7 @@ cmd_restore() {
     log "$BLUE" "  Backed up: $backed_up"
     log "$BLUE" "  Skipped:   $skipped"
     if [[ "$templates_skipped" -gt 0 ]]; then
-        log "$BLUE" "  Templates ignored: $templates_skipped"
+        log "$BLUE" "  Ignored (templates/backups): $templates_skipped"
     fi
     log "$BLUE" "  Failed:    $failed"
     if $journal_saved; then
@@ -823,7 +836,7 @@ cmd_list() {
     local count=0 templates_skipped=0
     while IFS=$'\t' read -r idx abs rel size sha mode mtime arch; do
         [[ "$idx" == \#* || -z "$idx" ]] && continue
-        if is_template_name "$abs"; then
+        if ! is_env_file "$abs"; then
             templates_skipped=$((templates_skipped + 1))
             continue
         fi
@@ -834,7 +847,7 @@ cmd_list() {
     echo "--------------------------------------------------------------------------"
     log "$BLUE" "Total files: $count"
     if [[ "$templates_skipped" -gt 0 ]]; then
-        log "$BLUE" "Templates ignored: $templates_skipped"
+        log "$BLUE" "Ignored (templates/backups): $templates_skipped"
     fi
 }
 

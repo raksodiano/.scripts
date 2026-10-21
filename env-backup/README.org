@@ -150,10 +150,12 @@ stable across runs and restores follow that same order.
    in place to =<file>.bak.<timestamp>=. Then the archived file is written using
    its original name. If there is no conflict, the file is simply restored and
    nothing is renamed.
-4. The SHA-256 stored in the manifest is verified. On mismatch the file is
+4. Template entries (=.env.example=, =.env.docker.example=, =.env.sample=,
+   =.env.template=, etc.) are ignored even if they exist in an older archive.
+5. The SHA-256 stored in the manifest is verified. On mismatch the file is
    skipped unless =-f= / =--force= is used.
-5. Parent directories are created as needed and the original mode is restored.
-6. A journal is saved under =~/.local/state/env-backup/restores/= so the restore
+6. Parent directories are created as needed and the original mode is restored.
+7. A journal is saved under =~/.local/state/env-backup/restores/= so the restore
    can be reverted with =env-backup undo=.
 
 ** Security notes:

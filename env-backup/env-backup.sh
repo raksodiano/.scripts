@@ -74,6 +74,7 @@ show_help() {
     echo "  The restored .env always keeps its original name."
     echo "  If that path already exists, only the existing file is renamed to"
     echo "  <file>.bak.<timestamp>; otherwise the file is simply restored."
+    echo "  Template files (.example/.sample/.template) are never restored."
     echo ""
     echo -e "${BLUE}Undo options:${NC}"
     echo "  -f, --force     Undo even if a file changed after the restore"
@@ -126,6 +127,14 @@ unique_path() {
         n=$((n + 1))
     done
     echo "$candidate"
+}
+
+is_template_name() {
+    local name="${1##*/}"
+    case "$name" in
+        *.example|*.example.*|*.sample|*.sample.*|*.template|*.template.*) return 0 ;;
+    esac
+    return 1
 }
 
 is_excluded_pattern() {
@@ -238,6 +247,7 @@ cmd_pack() {
             log "$YELLOW" "  Skipping path with tabs/newlines: $f"
             continue
         fi
+        is_template_name "$rel" && continue
         is_excluded_pattern "$rel" && continue
         files+=("$f")
     done < <(find "${find_args[@]}" 2>/dev/null | LC_ALL=C sort -z)
@@ -447,10 +457,15 @@ cmd_restore() {
 
     local idx abs rel size sha mode mtime arch
     local restored=0 backed_up=0 skipped=0 failed=0
-    local journal_saved=false
+    local journal_saved=false templates_skipped=0
 
     while IFS=$'\t' read -r idx abs rel size sha mode mtime arch; do
         [[ "$idx" == \#* || -z "$idx" ]] && continue
+
+        if is_template_name "$abs"; then
+            templates_skipped=$((templates_skipped + 1))
+            continue
+        fi
 
         case "$rel" in
             /*|..|../*|*/../*|*/..) log "$YELLOW" "  Skipping unsafe relative path: $rel"; skipped=$((skipped + 1)); continue ;;
@@ -569,6 +584,9 @@ cmd_restore() {
     log "$GREEN" "  Restored:  $restored"
     log "$BLUE" "  Backed up: $backed_up"
     log "$BLUE" "  Skipped:   $skipped"
+    if [[ "$templates_skipped" -gt 0 ]]; then
+        log "$BLUE" "  Templates ignored: $templates_skipped"
+    fi
     log "$BLUE" "  Failed:    $failed"
     if $journal_saved; then
         log "$BLUE" "  Undo:        env-backup undo"
@@ -802,15 +820,22 @@ cmd_list() {
     echo "--------------------------------------------------------------------------"
 
     local idx abs rel size sha mode mtime arch
-    local count=0
+    local count=0 templates_skipped=0
     while IFS=$'\t' read -r idx abs rel size sha mode mtime arch; do
         [[ "$idx" == \#* || -z "$idx" ]] && continue
+        if is_template_name "$abs"; then
+            templates_skipped=$((templates_skipped + 1))
+            continue
+        fi
         printf "%-6s %-10s %-6s %s\n" "$idx" "$size" "$mode" "$abs"
         count=$((count + 1))
     done < "$manifest"
 
     echo "--------------------------------------------------------------------------"
     log "$BLUE" "Total files: $count"
+    if [[ "$templates_skipped" -gt 0 ]]; then
+        log "$BLUE" "Templates ignored: $templates_skipped"
+    fi
 }
 
 main() {

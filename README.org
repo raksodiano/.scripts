@@ -6,6 +6,7 @@ This directory contains custom CLI scripts and tools.
 - Each tool has its own directory
 
 ** Current contents:
+- [[./env-backup][env-backup]]: Package and restore all .env files from a directory tree
 - [[./git-branch-cleanup][git-branch-cleanup]]: Script to clean up local and remote branches in Git repositories
 - [[./git-group-clone][git-group-clone]]: Clone all repositories from a GitHub organization or GitLab group
 
@@ -14,6 +15,9 @@ This directory contains custom CLI scripts and tools.
 *** Step 1: Create symlinks
 
 #+begin_src bash
+# env-backup
+ln -s ~/.scripts/env-backup/env-backup.sh ~/bin/env-backup
+
 # git-branch-cleanup
 ln -s ~/.scripts/git-branch-cleanup/git-branch-cleanup.sh ~/bin/git-branch-cleanup
 
